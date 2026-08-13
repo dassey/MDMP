@@ -120,6 +120,32 @@ If the laptop has internet and you want the strongest drafting, install the
 Claude client (`pip install anthropic`), choose that provider, and paste an API
 key.
 
+## Changing what the tool asks the model
+
+Next to every step heading and every field label there is a small gear — ⚙.
+It opens the prompt behind that field: the instructions the model is given, and
+the message describing this particular decision. Both start out written and
+working; you only touch them if you want something different.
+
+- The gear **next to a field** changes that one field.
+- The gear **next to the step heading** changes every field in that step.
+- **⚙ Prompt for every field**, at the bottom of the step, changes the lot.
+
+The most specific one wins, so a field-level change beats a step-level one. Tick
+**Save as the server-wide default** and it applies to every plan on the machine
+instead of only this one; leave it unticked and other plans are untouched. The
+box at the top always tells you where the current text is coming from, and
+**Reset to built-in** puts it back.
+
+The panel at the bottom shows exactly what would be sent, filled in with your
+real plan, so you can check it before you save. Things in `{curly braces}` are
+filled in for you — `{context}` becomes the decisions you have already made,
+`{passages}` becomes the doctrine the tool found. The full list is in the editor
+under *Placeholders you can use*.
+
+This has no effect while the provider is **Offline doctrinal templates** — those
+options are built from code, not from a prompt. Point the tool at a model first.
+
 ## Making the doctrine better
 
 Drop your publications — FM 5-0, FM 6-0, ADP 5-0, whatever your unit uses — into

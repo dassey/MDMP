@@ -5,6 +5,7 @@ import os
 
 from harness import auth, db
 from harness.agent import engine as agent_engine
+from harness.agent import prompts as P
 from harness.agent import providers
 from harness.flow import context_for, dep_hash, flow_state, is_empty
 from harness.mdmp import doctrine as D
@@ -286,14 +287,16 @@ def gen_options(req):
             if k != field_key and not is_empty(values.get(k)):
                 prior.append(values[k])
 
-    options, meta = _engine().generate(FLOW, field, ctx, want, prior)
+    options, meta = _engine().generate(FLOW, field, ctx, want, prior,
+                                      plan_id=pid)
     db.ex("INSERT INTO optionsets(plan_id,step_key,field_key,dep_hash,"
           "provider,options_json,created_at) VALUES(?,?,?,?,?,?,?)",
           (pid, FLOW.step_of(field_key).key, field_key, current_hash,
            meta.get("provider", "offline"), json.dumps(options), db.now()))
     return {"options": options, "cached": False,
             "provider": meta.get("provider"), "notes": meta.get("notes", []),
-            "passages": meta.get("passages", [])}
+            "passages": meta.get("passages", []),
+            "prompt": meta.get("prompt", {})}
 
 
 @route("POST", "/api/plans/{pid}/answer")
@@ -355,7 +358,7 @@ def answer_history(req):
     rows = db.q(
         "SELECT a.*, u.display_name FROM answers a "
         "LEFT JOIN users u ON u.id=a.author_id "
-        "WHERE a.plan_id=? AND a.field_key=? ORDER BY a.created_at DESC "
+        "WHERE a.plan_id=? AND a.field_key=? ORDER BY a.id DESC "
         "LIMIT 20", (pid, req.params["field"]))
     for r in rows:
         try:
@@ -622,3 +625,139 @@ def set_provider(req):
     eng = _engine()
     ok = eng.provider.available()
     return {"ok": True, "describe": eng.describe(), "available": ok}
+
+
+# ------------------------------------------------------------- prompts ----
+
+def _prompt_target(req):
+    """Work out what the caller is editing: a field, a step, or everything."""
+    field_key = req.arg("field")
+    step_key = req.arg("step")
+    if field_key:
+        field = FLOW.field(field_key)
+        if not field:
+            raise HttpError(404, "no such field: %s" % field_key)
+        return "field", field_key, FLOW.step_of(field_key).key, field
+    if step_key:
+        if not FLOW.step(step_key):
+            raise HttpError(404, "no such step: %s" % step_key)
+        return "step", step_key, step_key, None
+    return "global", "", None, None
+
+
+@route("GET", "/api/plans/{pid}/prompt")
+def get_prompt(req):
+    """The effective prompt for a field, a step, or the whole flow.
+
+    Includes where each half came from, what overrides exist along the chain,
+    and a rendered preview of exactly what would be sent to the model.
+    """
+    pid = int(req.params["pid"])
+    _plan_or_404(pid)
+    level, key, step_key, field = _prompt_target(req)
+
+    resolved = P.resolve(pid, step_key, key if level == "field" else None)
+    # For a step or global edit there is no single field, so preview against a
+    # representative one so the placeholders have something to fill with.
+    preview_field = field
+    if preview_field is None:
+        step = FLOW.step(step_key) if step_key else FLOW.steps[0]
+        preview_field = step.fields[0] if step.fields else FLOW.all_fields()[0]
+    preview_step = FLOW.step_of(preview_field.key)
+
+    values, _h, _m = _answers(pid)
+    ctx = context_for(FLOW, preview_field, values)
+    passages = []
+    try:
+        passages = rag.search(preview_field.label, limit=2)
+    except Exception:
+        pass
+
+    def as_override(row):
+        # A row with both halves blank overrides nothing; do not report it as
+        # an override or the editor would claim a customisation that is not there.
+        if not row or not ((row["system"] or "").strip()
+                           or (row["template"] or "").strip()):
+            return None
+        return {"system": row["system"], "template": row["template"]}
+
+    own = as_override(db.q1(
+        "SELECT * FROM prompts WHERE level=? AND scope_key=? AND plan_id=?",
+        (level, key, pid)))
+    server = as_override(db.q1(
+        "SELECT * FROM prompts WHERE level=? AND scope_key=? AND plan_id IS NULL",
+        (level, key)))
+
+    rendered = P.render(resolved["template"],
+                        P.values_for(preview_field, preview_step, ctx,
+                                     passages, 5))
+    return {
+        "level": level, "key": key, "step_key": step_key,
+        "label": (field.label if field else
+                  (FLOW.step(step_key).title if step_key else "Every field")),
+        "effective": resolved,
+        "own_override": own,
+        "server_override": server,
+        "chain": P.overrides_for(pid, step_key, key if level == "field" else None),
+        "defaults": {"system": P.DEFAULT_SYSTEM, "template": P.DEFAULT_TEMPLATE},
+        "placeholders": [{"name": n, "desc": d} for n, d in P.PLACEHOLDERS],
+        "preview": {"system": resolved["system"], "user": rendered},
+        "preview_field": preview_field.label,
+    }
+
+
+@route("POST", "/api/plans/{pid}/prompt")
+def set_prompt(req):
+    pid = int(req.params["pid"])
+    _plan_or_404(pid)
+    if not auth.can_plan(auth.plan_role(pid, req.user)):
+        raise HttpError(403, "you do not have planning rights on this plan")
+    level, key, step_key, _field = _prompt_target(req)
+    data = req.json()
+    as_server_default = bool(data.get("server_default"))
+    if as_server_default and req.user["role"] != "admin":
+        raise HttpError(403, "only an admin can change the server-wide default")
+
+    scope_plan = None if as_server_default else pid
+    system, template = P.only_changes(
+        level, key, scope_plan, step_key, key if level == "field" else None,
+        data.get("system", ""), data.get("template", ""))
+    unknown = P.unknown_placeholders(template)
+    P.save(level, key, scope_plan, system, template, req.user["id"])
+    stored = {"system": bool(system.strip()), "template": bool(template.strip())}
+    db.log(pid, req.user["id"], "prompt.saved",
+           "%s %s%s" % (level, key or "(all fields)",
+                        " — server default" if as_server_default else ""))
+    return {"ok": True, "unknown_placeholders": unknown,
+            "stored": stored, "changed": stored["system"] or stored["template"],
+            "scope": "server" if as_server_default else "plan"}
+
+
+@route("DELETE", "/api/plans/{pid}/prompt")
+def reset_prompt(req):
+    pid = int(req.params["pid"])
+    _plan_or_404(pid)
+    if not auth.can_plan(auth.plan_role(pid, req.user)):
+        raise HttpError(403, "you do not have planning rights on this plan")
+    level, key, _step_key, _field = _prompt_target(req)
+    scope = req.arg("scope", "plan")
+    if scope == "server":
+        if req.user["role"] != "admin":
+            raise HttpError(403, "only an admin can reset the server default")
+        P.clear(level, key, None)
+    else:
+        P.clear(level, key, pid)
+    db.log(pid, req.user["id"], "prompt.reset", "%s %s" % (level, key or "all"))
+    return {"ok": True}
+
+
+@route("GET", "/api/prompts")
+def list_prompts(req):
+    """Every override on the server — the audit view."""
+    rows = P.list_all()
+    for r in rows:
+        r["target"] = (r["scope_key"] or "(all fields)")
+        f = FLOW.field(r["scope_key"]) if r["level"] == "field" else None
+        st = FLOW.step(r["scope_key"]) if r["level"] == "step" else None
+        r["label"] = f.label if f else (st.title if st else "Every field")
+    return {"prompts": rows}

@@ -160,6 +160,21 @@ CREATE VIRTUAL TABLE IF NOT EXISTS chunks USING fts5(
     tokenize = 'porter unicode61'
 );
 
+-- Prompt overrides. level is 'field', 'step', or 'global'; scope_key is the
+-- field key, the step key, or ''. plan_id NULL means "server-wide default".
+CREATE TABLE IF NOT EXISTS prompts (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    level      TEXT NOT NULL,
+    scope_key  TEXT NOT NULL DEFAULT '',
+    plan_id    INTEGER REFERENCES plans(id) ON DELETE CASCADE,
+    system     TEXT NOT NULL DEFAULT '',
+    template   TEXT NOT NULL DEFAULT '',
+    updated_by INTEGER REFERENCES users(id),
+    updated_at INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_prompts_scope
+    ON prompts(level, scope_key, IFNULL(plan_id, -1));
+
 CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL

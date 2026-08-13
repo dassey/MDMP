@@ -175,6 +175,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(result)
             return self._send(json_response(result))
 
+        if path.startswith("/api/"):
+            # Never fall through to the app shell for an API path — a client
+            # that typos an endpoint must get JSON, not a page of HTML.
+            return self._send(json_response(
+                {"error": "no such endpoint: %s %s" % (method, path)}, 404))
         if method in ("GET", "HEAD"):
             return self._send(self._static(path))
         return self._send(json_response({"error": "not found"}, 404))

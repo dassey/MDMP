@@ -202,6 +202,8 @@ sections     OPORD paragraphs and annexes with owner and status
 activity     the feed
 docs/chunks  the doctrine index (chunks is an FTS5 virtual table)
 settings     provider configuration
+prompts      prompt overrides, keyed by (level, scope_key, plan_id). A NULL
+             plan_id is the server-wide default
 ```
 
 The `dep_hash` column on `answers` is the whole staleness mechanism: it is a
@@ -211,15 +213,81 @@ human decides whether the change actually invalidates the answer.
 
 ---
 
+## Prompts and the override chain
+
+`harness/agent/prompts.py` owns everything the model is told. Two independent
+pieces of text — `DEFAULT_SYSTEM` (role, rules, output contract) and
+`DEFAULT_TEMPLATE` (the field, the plan context, the retrieved doctrine) — with
+an override chain on top of each.
+
+```
+resolve(plan_id, step_key, field_key) -> {system, system_source,
+                                          template, template_source}
+```
+
+walks seven rungs, most specific first, and stops at the first non-empty value
+**for each half separately**:
+
+```
+field override, this plan          <- P.save("field", field_key, plan_id, ...)
+field override, server default     <- P.save("field", field_key, None, ...)
+step  override, this plan
+step  override, server default
+global override, this plan
+global override, server default
+built-in default                   <- DEFAULT_SYSTEM / DEFAULT_TEMPLATE
+```
+
+Because the halves resolve independently, a row that sets only `template`
+leaves `system` falling through to the next rung. That is what makes the editor
+usable: you can rewrite the task template for one field without restating the
+whole system prompt.
+
+Two rules keep the chain honest, and both matter if you write a client:
+
+- **`only_changes()` before `save()`.** The editor pre-fills both boxes with the
+  text currently in force, wherever it came from. Storing an untouched box would
+  silently pin it at this level, so a planner tweaking a template would freeze
+  the system prompt against later changes higher up. `only_changes()` resolves
+  the chain *with this rung skipped* and blanks any half that matches.
+- **A row with both halves blank is deleted.** It overrides nothing, and leaving
+  it would make the editor claim a customisation that is not there.
+
+### Adding a placeholder
+
+Add it to `PLACEHOLDERS` (name and the description shown in the editor) and
+supply it in `values_for()`. `test_every_documented_placeholder_is_actually_provided`
+fails if you do one without the other.
+
+Rendering is deliberately forgiving: `render()` uses a `format_map` subclass that
+leaves unknown placeholders in place, and catches the malformed-template errors
+so a stray `{` degrades to the built-in with an explanation rather than breaking
+generation. `unknown_placeholders()` is what the API reports back to the editor.
+
+Prompts never reach the offline provider — `engine.generate()` calls the
+generators directly for it. An override there is stored and reported, but it
+changes nothing until a model is configured.
+
+---
+
 ## Testing
 
 ```bash
-python3 scripts/smoke_test.py
+python3 scripts/run_tests.py            # unit + integration + smoke + browser
+python3 scripts/run_tests.py prompts    # just tests/test_prompts.py
+python3 scripts/run_tests.py --no-browser
 ```
 
-Drives the whole tool over HTTP against a throwaway database. When you add a
-field it is automatically covered — the test walks every field in the flow,
-generates options, and answers from them.
+`tests/` is stdlib `unittest`; `tests/base.py` gives you `DbCase` with a
+throwaway database and `make_plan` / `answer` / `answers` / `hashes` helpers.
+
+`scripts/smoke_test.py` drives the whole tool over HTTP against a throwaway
+database. When you add a field it is automatically covered — the test walks
+every field in the flow, generates options, and answers from them.
+
+`scripts/ui_test.py` does the same through Chromium, one throwaway server per
+suite. It is the only part of the project with a dependency; without Playwright
+installed it prints a note and exits 0 rather than failing.
 
 The generator sweep is worth keeping close by:
 

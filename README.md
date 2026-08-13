@@ -45,6 +45,12 @@ templates that read the plan you have built so far. Point it at a local model
 scenario more closely. Point it at the Claude API if the machine has internet.
 Same interface either way — the tool degrades, it does not break.
 
+**Every prompt is yours to change.** The defaults are written and working, but
+a gear icon next to every step and every field opens what is actually sent to
+the model, with a live preview. Rewrite it for one field, one step, or the whole
+flow; for this plan or as the machine's default. Your headquarters does things
+its own way — the tool should not argue.
+
 ---
 
 ## Running it
@@ -175,17 +181,68 @@ Step 4 is why this works on an aircraft.
 
 ---
 
+## Changing the prompts
+
+Every field's options come from two pieces of text: a **system prompt** (role,
+rules, output contract) and a **task template** (the field, the plan context,
+the retrieved doctrine). Both ship with working defaults, and both can be
+rewritten from the gear icon — ⚙ — that sits next to every step heading and
+every field label.
+
+Three scopes, each editable for just this plan or as the server-wide default:
+
+| Gear | Affects |
+|---|---|
+| Next to a field label, or *⚙ prompt* on an options panel | that one field |
+| Next to the step heading | every field in that step |
+| *⚙ Prompt for every field*, at the foot of the step | the whole flow |
+
+Resolution runs most-specific-first — field, then step, then global; within each
+level, this plan beats the server default — and falls back to the built-in.
+The system prompt and the task template resolve **independently**, so you can
+rewrite the task template for one field without restating the system prompt.
+The editor tells you which rung each half is currently coming from, and only
+stores the half you actually changed, so an override higher up the chain keeps
+flowing through to the rest.
+
+The editor renders a live preview by asking the server to fill the template
+against the real plan, so what you see is what gets sent. Placeholders like
+`{field_label}`, `{context}`, and `{passages}` are documented in the editor;
+an unknown one is left in place rather than rejected, and a template with an
+unbalanced brace degrades to the built-in instead of breaking generation.
+
+Prompts have no effect while the provider is **Offline doctrinal templates** —
+those options come from code, not from a model. Every override is recorded in
+the plan's activity log, and `GET /api/prompts` lists all of them.
+
+---
+
 ## Testing
 
 ```bash
-python3 scripts/smoke_test.py
+python3 scripts/run_tests.py          # everything
+python3 scripts/run_tests.py prompts  # one file
 ```
 
-Starts a real server on a throwaway database and drives the whole tool over
-HTTP: creates accounts, runs a plan through all 66 fields from generated
-options, checks dependency staleness, generates all three warning orders, moves
-to production, has a second user claim and edit a paragraph, verifies that staff
-cannot approve, and exports the order in every format. 47 checks.
+**Unit and integration — 254 tests.** The flow engine and dependency hashing,
+the prompt override chain, option parsing and the critique rules, every offline
+generator swept across thousands of plan contexts, retrieval, auth and role
+enforcement, OPORD assembly and every export format, and the HTTP API against a
+real server including concurrent writers.
+
+**Smoke — 47 checks.** `scripts/smoke_test.py` starts a real server on a
+throwaway database and drives the whole tool over HTTP: creates accounts, runs a
+plan through all 66 fields from generated options, checks dependency staleness,
+generates all three warning orders, moves to production, has a second user claim
+and edit a paragraph, verifies that staff cannot approve, and exports the order
+in every format.
+
+**Browser — 69 checks.** `scripts/ui_test.py` drives Chromium through the real
+interface: the wizard, back-navigation between steps, writing your own option,
+the production and OPORD tabs, mobile layout, and the whole prompt editor —
+including that an override at one level is inherited rather than copied. This is
+the only stage with a dependency (`pip install playwright && playwright install
+chromium`); without it the stage reports itself skipped.
 
 ---
 

@@ -296,7 +296,8 @@ def _parse_options(text):
             continue
         value = it.get("value", "")
         out.append({
-            "label": str(it.get("label") or "")[:120],
+            "label": (str(it.get("label") or "").strip()[:120]
+                      or "Option"),
             "value": value,
             "rationale": str(it.get("rationale") or ""),
             "flags": [str(f) for f in (it.get("flags") or [])][:5],

@@ -284,3 +284,46 @@ table.grid td:focus { outline: 2px solid var(--accent); outline-offset: -2px; }
   color: var(--amber); padding: .5rem .7rem; border-radius: 6px; font-size: .84rem; }
 .note { background: var(--blue-soft); border: 1px solid var(--blue);
   color: var(--blue); padding: .5rem .7rem; border-radius: 6px; font-size: .84rem; }
+
+/* ------------------------------------------------------- prompt editing */
+
+.gear {
+  border: 0; background: none; color: var(--ink-3); cursor: pointer;
+  font-size: .95rem; padding: 0 .25rem; line-height: 1; border-radius: 4px;
+}
+.gear:hover { color: var(--accent); background: var(--accent-soft); }
+h1 .gear { font-size: 1rem; vertical-align: middle; }
+button.tiny { font-size: .72rem; padding: .1rem .4rem; }
+
+.modalback {
+  position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 200;
+  display: flex; align-items: flex-start; justify-content: center;
+  padding: 3vh 1rem; overflow-y: auto;
+}
+.modal {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--radius); width: min(880px, 100%);
+  box-shadow: 0 12px 40px rgba(0,0,0,.28); display: flex; flex-direction: column;
+  max-height: 94vh;
+}
+.modalhead {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: .8rem 1rem; border-bottom: 1px solid var(--line);
+}
+.modalhead h2 { margin: 0; font-size: 1.05rem; }
+.modalbody { padding: 1rem; overflow-y: auto; }
+.modalfoot {
+  display: flex; gap: .5rem; align-items: center; flex-wrap: wrap;
+  padding: .7rem 1rem; border-top: 1px solid var(--line);
+  background: var(--panel-2); border-radius: 0 0 var(--radius) var(--radius);
+}
+.modal details { margin-top: .8rem; }
+.modal summary { cursor: pointer; color: var(--ink-2); }
+.modal code { font-family: var(--mono); font-size: .82rem; color: var(--accent); }
+
+pre.preview {
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px;
+  padding: .7rem; font-family: var(--mono); font-size: .74rem; line-height: 1.5;
+  white-space: pre-wrap; word-break: break-word; max-height: 30rem;
+  overflow-y: auto; margin: .5rem 0 0;
+}

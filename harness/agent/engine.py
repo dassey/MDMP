@@ -21,33 +21,10 @@ Step 4 is the reason this thing is usable on an aircraft.
 
 import re
 
+from harness.agent import prompts as P
 from harness.agent import providers
 from harness.mdmp import doctrine as D
 from harness.rag import index as rag
-
-SYSTEM = """You are a staff planning assistant supporting a US Army \
-headquarters running the military decision-making process (MDMP). You produce \
-candidate options for one field of a planning product at a time.
-
-Rules:
-- Every option must be doctrinally sound per FM 5-0, FM 6-0, ADP 5-0, and \
-FM 3-0, and must fit the plan context you are given.
-- Options must be genuinely different from one another. Do not return the same \
-answer three times with different wording.
-- Write in the voice of a staff product: short paragraphs, complete sentences, \
-no marketing language, no hedging.
-- All scenarios are notional. Use only the notional place and unit names \
-present in the context. Never reference real current operations or real units \
-in active deployment.
-- The `rationale` explains why a planner would choose this option over the \
-others, in one or two sentences.
-- Use `flags` for a risk or trade-off the planner should see before choosing \
-(for example "gives up ground early" or "requires assets we do not hold").
-
-Return JSON only, in this shape:
-{"options": [{"label": "...", "value": "...", "rationale": "...", \
-"flags": ["..."]}]}"""
-
 
 # ------------------------------------------------------------- critique ----
 
@@ -136,67 +113,6 @@ def _similarity(a, b):
 
 # ---------------------------------------------------------------- prompt ----
 
-def _context_block(ctx):
-    if not ctx:
-        return "(no prior decisions recorded yet)"
-    lines = []
-    for k, v in ctx.items():
-        if isinstance(v, list):
-            if v and isinstance(v[0], list):
-                rendered = "; ".join(" | ".join(map(str, row)) for row in v[:6])
-            else:
-                rendered = "; ".join(str(x) for x in v[:8])
-        else:
-            rendered = str(v)
-        if len(rendered) > 700:
-            rendered = rendered[:700] + " …"
-        lines.append("- %s: %s" % (k.replace("_", " "), rendered))
-    return "\n".join(lines)
-
-
-def _kind_instruction(field):
-    if field.kind == "choice":
-        return ("Each option's `value` is the full text of one choice. The "
-                "planner will pick exactly one.")
-    if field.kind == "multi":
-        return ("Each option's `value` is one selectable entry. The planner "
-                "will pick several.")
-    if field.kind == "items":
-        return ("Each option's `value` is ONE list entry, written as a "
-                "complete sentence or a short labelled statement. The planner "
-                "assembles a list from several of them.")
-    if field.kind == "table":
-        return ("Each option's `value` is one table row, written as a single "
-                "string with the cells separated by ' | ' in this column "
-                "order: %s." % ", ".join(field.columns))
-    return ("Each option's `value` is a complete draft of this field — a "
-            "paragraph or several, ready to paste into the order.")
-
-
-def build_prompt(field, step, ctx, passages, n):
-    parts = [
-        "PLANNING STEP: %d. %s" % (step.num, step.title),
-        "FIELD: %s" % field.label,
-        "WHAT THIS FIELD IS: %s" % (field.plain or field.label),
-        "DOCTRINAL NOTE: %s" % (field.doctrine or "—"),
-        "",
-        "PLAN CONTEXT (decisions already made):",
-        _context_block(ctx),
-    ]
-    if passages:
-        parts += ["", "RELEVANT DOCTRINE FROM THE LOCAL LIBRARY:"]
-        for p in passages:
-            parts.append("[%s] %s" % (p["title"], p["snippet"]))
-    parts += [
-        "",
-        "TASK: Produce %d distinct candidate options for this field." % n,
-        _kind_instruction(field),
-    ]
-    if field.columns:
-        parts.append("Columns: %s" % " | ".join(field.columns))
-    return "\n".join(parts)
-
-
 # ---------------------------------------------------------------- engine ----
 
 class Engine:
@@ -206,7 +122,7 @@ class Engine:
     def describe(self):
         return self.provider.describe()
 
-    def generate(self, flow, field, ctx, n=5, prior_values=()):
+    def generate(self, flow, field, ctx, n=5, prior_values=(), plan_id=None):
         """Return (options, meta). Never raises, never returns an empty list."""
         step = flow.step_of(field.key)
         meta = {"provider": self.provider.name, "notes": []}
@@ -218,11 +134,15 @@ class Engine:
         except Exception as exc:
             meta["notes"].append("doctrine search unavailable: %s" % exc)
 
+        system, prompt, resolution = P.build(plan_id, field, step, ctx,
+                                            passages, n)
+        meta["prompt"] = {"system_source": resolution["system_source"],
+                          "template_source": resolution["template_source"]}
+
         options = []
         if self.provider.name != "offline":
             try:
-                prompt = build_prompt(field, step, ctx, passages, n)
-                raw = self.provider.options(SYSTEM, prompt, n)
+                raw = self.provider.options(system, prompt, n)
                 options = self._normalise(raw, field)
             except providers.ProviderError as exc:
                 meta["notes"].append("%s unavailable (%s) — using offline "

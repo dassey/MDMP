@@ -326,7 +326,10 @@ function paneSteps() {
   const idx = S.flow.steps.findIndex((s) => s.key === S.stepKey);
 
   const head = el('div', { class: 'stephead' },
-    el('h1', { text: 'Step ' + def.num + ' — ' + def.title }),
+    el('h1', {},
+      'Step ' + def.num + ' — ' + def.title,
+      S.canPlan ? gear('step', def.key,
+        'Edit the prompt for every field in this step') : null),
     el('div', { class: 'plain', text: def.plain }),
     el('div', { class: 'small muted', style: 'margin-top:.4rem',
       text: 'Purpose: ' + def.purpose }),
@@ -355,7 +358,13 @@ function paneSteps() {
       onclick: () => window.open('/api/plans/' + S.planId + '/warnord/' + def.warnord, '_blank') }))
     : null;
 
-  return el('div', {}, el('div', { class: 'card' }, head, fields), warnord, nav);
+  const promptbar = S.canPlan ? el('div', { class: 'row tiny muted',
+    style: 'margin-top:.8rem;justify-content:flex-end' },
+    el('button', { class: 'ghost', text: '\u2699 Prompt for every field',
+      onclick: () => openPromptEditor('global', '') })) : null;
+
+  return el('div', {}, el('div', { class: 'card' }, head, fields, promptbar),
+    warnord, nav);
 }
 
 /* ------------------------------------------------------------ one field */
@@ -373,7 +382,9 @@ function fieldCard(f, status) {
       : el('span', { class: 'badge opt', text: 'optional' }),
     f.opord && f.opord.length ? el('span', { class: 'tiny muted',
       text: '→ feeds ' + f.opord.length + ' OPORD paragraph'
-        + (f.opord.length > 1 ? 's' : '') }) : null);
+        + (f.opord.length > 1 ? 's' : '') }) : null,
+    S.canPlan ? gear('field', f.key,
+      'Edit the prompt for this field') : null);
   box.appendChild(head);
   if (f.plain) box.appendChild(el('div', { class: 'plain', text: f.plain }));
   if (f.doctrine) box.appendChild(el('div', { class: 'doct', text: f.doctrine }));
@@ -505,9 +516,14 @@ function renderOptions(f, box) {
   if (data.notes && data.notes.length) {
     host.appendChild(el('div', { class: 'note', text: data.notes.join(' · ') }));
   }
-  host.appendChild(el('div', { class: 'tiny muted', text:
+  const pr = data.prompt || {};
+  const promptNote = (pr.template_source && pr.template_source !== 'built-in default')
+    ? ' · prompt: ' + pr.template_source : '';
+  host.appendChild(el('div', { class: 'tiny muted' },
     (data.options.length + ' options · ' + (data.provider || 'offline')
-      + (data.cached ? ' · cached' : '')) }));
+      + (data.cached ? ' · cached' : '') + promptNote + '  '),
+    S.canPlan ? el('button', { class: 'ghost tiny', text: '\u2699 prompt',
+      onclick: () => openPromptEditor('field', f.key) }) : null));
 
   const multi = (f.kind === 'items' || f.kind === 'multi' || f.kind === 'table');
   const current = S.answers[f.key];
@@ -952,6 +968,176 @@ function viewSettings() {
   box.appendChild(el('button', { text: '← back to plans',
     onclick: () => { S.view = 'plans'; loadPlans(); } }));
   return box;
+}
+
+/* ------------------------------------------------------- prompt editing */
+
+function gear(level, key, title) {
+  return el('button', {
+    class: 'gear', title: title || 'Edit the prompt used to generate options',
+    'aria-label': title || 'Edit prompt',
+    onclick: (e) => { e.stopPropagation(); openPromptEditor(level, key); },
+  }, '\u2699');
+}
+
+function modal(title, bodyNodes, footNodes) {
+  const back = el('div', { class: 'modalback', onclick: (e) => {
+    if (e.target === back) back.remove();
+  } });
+  const box = el('div', { class: 'modal' },
+    el('div', { class: 'modalhead' },
+      el('h2', { text: title }),
+      el('button', { class: 'ghost', text: '\u00d7', title: 'close',
+        onclick: () => back.remove() })),
+    el('div', { class: 'modalbody' }, bodyNodes),
+    el('div', { class: 'modalfoot' }, footNodes));
+  back.appendChild(box);
+  document.body.appendChild(back);
+  const esc = (e) => {
+    if (e.key === 'Escape') { back.remove(); document.removeEventListener('keydown', esc); }
+  };
+  document.addEventListener('keydown', esc);
+  return back;
+}
+
+async function openPromptEditor(level, key) {
+  let qs = '';
+  if (level === 'field') qs = '?field=' + encodeURIComponent(key);
+  else if (level === 'step') qs = '?step=' + encodeURIComponent(key);
+  let d;
+  try {
+    d = await api('/api/plans/' + S.planId + '/prompt' + qs);
+  } catch (e) { return toast(e.message); }
+
+  const sys = el('textarea', { style: 'min-height:11rem;font-size:.82rem' });
+  const tpl = el('textarea', { style: 'min-height:13rem;font-size:.82rem' });
+  sys.value = d.effective.system;
+  tpl.value = d.effective.template;
+
+  const status = el('div', { class: 'small muted' });
+  const setStatus = () => {
+    status.textContent = '';
+    status.appendChild(el('div', { text:
+      'System prompt in force: ' + d.effective.system_source }));
+    status.appendChild(el('div', { text:
+      'Task template in force: ' + d.effective.template_source }));
+    if (d.own_override) {
+      status.appendChild(el('div', { class: 'ok',
+        text: 'This plan has its own override at this level.' }));
+    }
+    if (d.server_override) {
+      status.appendChild(el('div', { class: 'ok',
+        text: 'A server-wide default is set at this level.' }));
+    }
+  };
+  setStatus();
+
+  const preview = el('pre', { class: 'preview' });
+  preview.textContent = d.preview.user;
+
+  const scopeNote = el('div', { class: 'tiny muted' });
+  const serverBox = el('input', { type: 'checkbox', id: 'srvdef' });
+  const syncScope = () => {
+    scopeNote.textContent = serverBox.checked
+      ? 'Saving as the server-wide default: applies to every plan on this machine.'
+      : 'Saving for this plan only.';
+    // Reset only removes an override at the exact scope being edited. With
+    // nothing there it would be a no-op, so say so by disabling it rather
+    // than letting the click do nothing.
+    if (resetBtn) {
+      const has = serverBox.checked ? d.server_override : d.own_override;
+      resetBtn.disabled = !has;
+      resetBtn.title = has ? 'Remove this override'
+        : (serverBox.checked ? 'No server-wide override is set at this level'
+          : 'This plan has no override at this level');
+    }
+  };
+  serverBox.addEventListener('change', syncScope);
+
+  const levelName = level === 'field' ? 'this field'
+    : (level === 'step' ? 'every field in this step' : 'every field in the flow');
+
+  const chain = d.chain.length ? el('div', { class: 'tiny muted' },
+    'Overrides already set: ' + d.chain.map((c) => c.label).join(', ')) : null;
+
+  const body = [
+    el('div', { class: 'note', text:
+      'This prompt is what gets sent to the model when you press Generate '
+      + 'options. Editing here affects ' + levelName + '. It changes nothing '
+      + 'when the provider is Offline doctrinal templates — those come from '
+      + 'code, not from a prompt.' }),
+    status, chain,
+    el('label', { class: 'lab', text: 'System prompt — role, rules, output contract' }),
+    sys,
+    el('label', { class: 'lab', text: 'Task template — the message describing this field' }),
+    tpl,
+    el('details', {},
+      el('summary', { class: 'small', text: 'Placeholders you can use' }),
+      el('div', { class: 'kv', style: 'margin-top:.5rem' },
+        d.placeholders.map((ph) => [
+          el('dt', {}, el('code', { text: '{' + ph.name + '}' })),
+          el('dd', { text: ph.desc })]).flat())),
+    el('details', { open: 'open' },
+      el('summary', { class: 'small', text:
+        'Preview — exactly what would be sent (field: ' + d.preview_field + ')' }),
+      preview),
+  ];
+
+  const refresh = async () => {
+    // Save silently, re-read, and repaint the preview from the server so the
+    // preview is the real thing rather than a guess made in the browser.
+    await post('/api/plans/' + S.planId + '/prompt' + qs,
+      { system: sys.value, template: tpl.value,
+        server_default: serverBox.checked });
+    d = await api('/api/plans/' + S.planId + '/prompt' + qs);
+    preview.textContent = d.preview.user;
+    setStatus();
+    syncScope();
+  };
+
+  const resetBtn = el('button', { text: 'Reset to built-in',
+    onclick: async () => {
+      if (!confirm('Remove the override and go back to the built-in prompt?')) return;
+      try {
+        await api('/api/plans/' + S.planId + '/prompt' + (qs || '?') +
+          (qs ? '&' : '') + 'scope=' + (serverBox.checked ? 'server' : 'plan'),
+          { method: 'DELETE' });
+        back.remove(); toast('Reset to the built-in prompt');
+        delete S.options[key]; render();
+      } catch (e) { toast(e.message); }
+    } });
+  syncScope();
+
+  const foot = [
+    el('label', { class: 'row tight small', style: 'margin-right:auto' },
+      serverBox, ' Save as the server-wide default'),
+    scopeNote,
+    el('button', { text: 'Preview', onclick: async () => {
+      try { await refresh(); toast('Saved and previewed'); }
+      catch (e) { toast(e.message); }
+    } }),
+    resetBtn,
+    el('button', { class: 'primary', text: 'Save', onclick: async () => {
+      try {
+        const r = await post('/api/plans/' + S.planId + '/prompt' + qs,
+          { system: sys.value, template: tpl.value,
+            server_default: serverBox.checked });
+        if (r.unknown_placeholders && r.unknown_placeholders.length) {
+          toast('Saved — unknown placeholder(s) left as-is: '
+            + r.unknown_placeholders.join(', '));
+        } else if (!r.changed) {
+          toast('No change — still using the inherited prompt');
+        } else {
+          toast('Prompt saved (' + r.scope + ')');
+        }
+        back.remove();
+        delete S.options[key];
+        render();
+      } catch (e) { toast(e.message); }
+    } }),
+  ];
+
+  const back = modal('Prompt \u2014 ' + d.label, body, foot);
 }
 
 /* ----------------------------------------------------------------- util */
