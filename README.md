@@ -224,7 +224,7 @@ python3 scripts/run_tests.py          # everything
 python3 scripts/run_tests.py prompts  # one file
 ```
 
-**Unit and integration — 254 tests.** The flow engine and dependency hashing,
+**Unit and integration — 259 tests.** The flow engine and dependency hashing,
 the prompt override chain, option parsing and the critique rules, every offline
 generator swept across thousands of plan contexts, retrieval, auth and role
 enforcement, OPORD assembly and every export format, and the HTTP API against a

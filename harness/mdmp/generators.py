@@ -653,7 +653,7 @@ def gen_enemy_caps(ctx, n=10):
             "choke points and previously used halt locations.", ""),
         opt("Cyberspace and network attack", "CYBER: Has demonstrated intrusion "
             "attempts against coalition and host-nation logistics networks; "
-            "assume our unclassified sustainment traffic is read.", ""),
+            "assume our routine sustainment traffic is read.", ""),
     ]
     if pk == "irregular":
         order = [8, 6, 2, 0, 9, 3, 5, 1, 4, 7]

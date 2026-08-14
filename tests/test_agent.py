@@ -443,17 +443,96 @@ class TestGenerators(unittest.TestCase):
         finally:
             del G.REGISTRY["_explode"]
 
+    # Ask for far more options than any generator holds, so nothing is hidden
+    # behind the n cut. Several generators reorder their list by threat
+    # posture, which means a low n shows only whatever floats to the top —
+    # exactly how an offending option can sit unnoticed for a year.
+    SWEEP_N = 40
+
+    def _every_option_text(self):
+        """Every word every generator can emit, across every context."""
+        for key, fn in sorted(G.REGISTRY.items()):
+            for ctx in self.contexts:
+                for o in fn(ctx, self.SWEEP_N):
+                    yield key, " ".join([
+                        str(o.get("label") or ""), str(o.get("value") or ""),
+                        str(o.get("rationale") or ""),
+                        " ".join(str(f) for f in (o.get("flags") or [])),
+                    ]).lower()
+
     def test_notional_names_only(self):
         """No generator may name a real country or a real current operation."""
         real = ["russia", "ukraine", "china", "iran", "north korea", "iraq",
                 "afghanistan", "syria", "taiwan", "israel", "gaza"]
-        for key, fn in sorted(G.REGISTRY.items()):
-            for ctx in self.contexts[:60]:
-                blob = " ".join(str(o["value"]) + " " + str(o["label"])
-                                for o in fn(ctx, 6)).lower()
-                for name in real:
-                    self.assertNotIn(name, blob,
-                                     "%s mentions %s" % (key, name))
+        for key, blob in self._every_option_text():
+            for name in real:
+                self.assertNotIn(name, blob, "%s mentions %s" % (key, name))
+
+    def test_no_generator_mentions_classification(self):
+        """Marking, handling, and release are decisions for people.
+
+        The tool takes no position on them, so no generated option may raise
+        the subject — not as a marking, not as a caveat, not in passing.
+        """
+        for key, blob in self._every_option_text():
+            for word in CLASSIFICATION_WORDS:
+                self.assertNotIn(word, blob, "%s mentions %s" % (key, word))
+
+
+CLASSIFICATION_WORDS = [
+    "classified", "classification", "unclassified", "declassif",
+    "top secret", "noforn", "fouo", "for official use only",
+    "controlled unclassified", "releasable to", "rel to usa",
+]
+
+
+class TestNoClassificationAnywhere(unittest.TestCase):
+    """The constraint holds across the whole tool, not only the generators.
+
+    Field labels, plain-English help, doctrinal notes, the OPORD skeleton, the
+    default prompts, and the interface text are all places the tool speaks in
+    its own voice. None of them may raise classification. The doctrine corpus
+    is exempt — those are source documents, not the tool talking.
+    """
+
+    def _assert_clean(self, text, where):
+        low = (text or "").lower()
+        for word in CLASSIFICATION_WORDS:
+            self.assertNotIn(word, low, "%s mentions %s" % (where, word))
+
+    def test_flow_definition_is_clean(self):
+        from harness.mdmp.flow_def import FLOW
+        for step in FLOW.steps:
+            self._assert_clean("%s %s" % (step.title, step.purpose or ""),
+                               "step %s" % step.key)
+            for f in step.fields:
+                self._assert_clean(
+                    " ".join([f.label, f.plain or "", f.doctrine or "",
+                              " ".join(f.columns or [])]),
+                    "field %s" % f.key)
+
+    def test_opord_skeleton_is_clean(self):
+        from harness.mdmp import doctrine
+        for node in doctrine.OPORD_SKELETON:
+            self._assert_clean(
+                " ".join(str(node.get(k) or "")
+                         for k in ("title", "guidance")),
+                "opord node %s" % node.get("key"))
+
+    def test_default_prompts_are_clean(self):
+        from harness.agent import prompts as P
+        self._assert_clean(P.DEFAULT_SYSTEM, "default system prompt")
+        self._assert_clean(P.DEFAULT_TEMPLATE, "default task template")
+
+    def test_interface_text_is_clean(self):
+        import os
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        for name in ("static/app.js", "static/index.html", "static/style.css"):
+            path = os.path.join(root, name)
+            if not os.path.isfile(path):
+                continue
+            with open(path, encoding="utf-8") as fh:
+                self._assert_clean(fh.read(), name)
 
 
 if __name__ == "__main__":
