@@ -56,6 +56,29 @@ across thousands of plan contexts — it has already caught generators that rais
 on a literal `%` and silently degraded to "write it yourself". Trust it over
 spot-checking.
 
+## Branches
+
+**Do not leave branches lying around.** `main` and nothing else, at rest.
+
+Work goes straight to `main` once the suite is green — this is a small project
+with one owner who is not reviewing diffs, and a branch that only ever gets
+merged by the person who wrote it is ceremony, not safety. Use a branch only
+when a change genuinely needs a second pair of eyes before it lands.
+
+When you do use one: merge it as soon as CI is green, then delete it. A branch
+that is fully contained in `main` has nothing in it — every commit is already
+there — so deleting it loses nothing.
+
+If a branch does not belong, delete it rather than leaving it to be puzzled
+over later. Check first that it is actually merged:
+
+```bash
+git merge-base --is-ancestor origin/<branch> origin/main && echo "safe to delete"
+```
+
+Turning on **Settings → General → Automatically delete head branches** makes
+GitHub do this itself on every merge, which is better than remembering.
+
 ## The shape of the thing
 
 A generic flow engine with MDMP as its first tool. `harness/flow.py` knows
